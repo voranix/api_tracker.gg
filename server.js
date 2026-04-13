@@ -16,6 +16,10 @@ if (!API_KEY) {
     process.exit(1);
 }
 
+// ================= CACHE =================
+const cache = {};
+const CACHE_TIME = 1000 * 60 * 10; // ⏱ 10 minutos
+
 // ================= FUNCIÓN MOCK =================
 function getMockData(name, tag) {
     return {
@@ -32,6 +36,15 @@ function getMockData(name, tag) {
 // ================= RUTA VALORANT =================
 app.get("/valorant/:name/:tag", async (req, res) => {
     const { name, tag } = req.params;
+    const key = `${name}#${tag}`;
+
+    // ================= CACHE HIT =================
+    if (cache[key] && (Date.now() - cache[key].timestamp < CACHE_TIME)) {
+        console.log(`⚡ Cache HIT: ${key}`);
+        return res.json(cache[key].data);
+    }
+
+    console.log(`🌐 Fetch real: ${key}`);
 
     try {
         const url = `https://public-api.tracker.gg/v2/valorant/standard/profile/riot/${encodeURIComponent(name)}%23${encodeURIComponent(tag)}`;
@@ -42,13 +55,23 @@ app.get("/valorant/:name/:tag", async (req, res) => {
             }
         });
 
-        // 🔴 SI NO ESTÁ AUTORIZADO → USA MOCK
+        // 🔴 SIN AUTORIZACIÓN → MOCK
         if (response.status === 401) {
-            console.log("⚠️ API no autorizada, usando datos MOCK");
-            return res.json(getMockData(name, tag));
+            console.log("⚠️ API no autorizada, usando MOCK");
+
+            const mock = getMockData(name, tag);
+
+            cache[key] = {
+                data: mock,
+                timestamp: Date.now()
+            };
+
+            return res.json(mock);
         }
 
+        // 🔴 ERROR REAL API
         if (!response.ok) {
+            console.log(`❌ Error API (${response.status})`);
             return res.status(response.status).json({
                 error: "Error en la API de tracker.gg",
                 status: response.status
@@ -69,13 +92,25 @@ app.get("/valorant/:name/:tag", async (req, res) => {
             rankImage: data.data.segments?.[0]?.stats?.rank?.metadata?.iconUrl || null
         };
 
+        // ================= GUARDAR EN CACHE =================
+        cache[key] = {
+            data: playerData,
+            timestamp: Date.now()
+        };
+
         res.json(playerData);
 
     } catch (error) {
-        console.error("❌ ERROR:", error.message);
+        console.error("❌ ERROR FETCH:", error.message);
 
-        // 🔥 SI FALLA TODO → TAMBIÉN USA MOCK
-        res.json(getMockData(name, tag));
+        const mock = getMockData(name, tag);
+
+        cache[key] = {
+            data: mock,
+            timestamp: Date.now()
+        };
+
+        res.json(mock);
     }
 });
 
@@ -83,6 +118,19 @@ app.get("/valorant/:name/:tag", async (req, res) => {
 app.get("/", (req, res) => {
     res.send("🚀 API VORANIX funcionando correctamente");
 });
+
+// ================= LIMPIEZA AUTOMÁTICA CACHE =================
+setInterval(() => {
+    const now = Date.now();
+
+    Object.keys(cache).forEach(key => {
+        if (now - cache[key].timestamp > CACHE_TIME) {
+            delete cache[key];
+        }
+    });
+
+    console.log("🧹 Cache limpiado");
+}, CACHE_TIME);
 
 // ================= SERVER =================
 const PORT = process.env.PORT || 3000;
